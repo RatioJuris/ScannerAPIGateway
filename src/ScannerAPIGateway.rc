@@ -1,3 +1,5 @@
+IDI_APP_ICON ICON "icon.ico"
+
 #include <windows.h>
 #include <winver.h>
 
@@ -5,7 +7,6 @@ VS_VERSION_INFO VERSIONINFO
 FILEVERSION     1,0,0,0
 PRODUCTVERSION  1,0,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
-IDI_APP_ICON ICON "icon.ico"
 
 #ifdef _DEBUG
 FILEFLAGS       VS_FF_DEBUG
