@@ -1,216 +1,66 @@
-name: ScannerAPIGateway
+name: build-win64
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "src/ScannerAPIGateway.cpp"
-      - "src/ScannerAPIGateway.rc"
-      - ".github/workflows/build.yml"
-
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: ScannerAPIGateway-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write   # needed only for publishing a release on tags
 
 jobs:
-  build-engine:
-    name: ScannerAPIGateway (x64)
+  win64:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Create Temporary Workspace Directory
+      - name: Compile resources
         shell: cmd
-        run: |
-          if not exist staging mkdir staging
+        run: rc /nologo /fo ScannerAPIGateway.res src\ScannerAPIGateway.rc
 
-      - name: Verify Source Files
+      - name: Build (x64, static CRT)
         shell: cmd
+        run: >
+          cl /nologo /std:c++17 /EHsc /O2 /MT /W4 /utf-8 /guard:cf
+          /DUNICODE /D_UNICODE
+          src\ScannerAPIGateway.cpp ScannerAPIGateway.res
+          /Fe:ScannerAPIGateway.exe
+          /link /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /guard:cf
+
+      - name: Smoke test
+        shell: pwsh
         run: |
-          if not exist "src\ScannerAPIGateway.cpp" (
-              echo ERROR: src\ScannerAPIGateway.cpp is missing.
-              exit /b 1
-          )
+          ./ScannerAPIGateway.exe version
+          if ($LASTEXITCODE -ne 0) { throw "version failed" }
+          ./ScannerAPIGateway.exe scan --dpi 5
+          if ($LASTEXITCODE -ne 2) { throw "expected exit code 2 for invalid arguments, got $LASTEXITCODE" }
+          ./ScannerAPIGateway.exe scan --blank-skip 2
+          if ($LASTEXITCODE -ne 2) { throw "expected exit code 2 for invalid --blank-skip, got $LASTEXITCODE" }
+          ./ScannerAPIGateway.exe list --backends twain
+          if ($LASTEXITCODE -ne 0) { throw "list --backends twain should succeed even without a DSM, got $LASTEXITCODE" }
 
-          if not exist "src\ScannerAPIGateway.rc" (
-              echo ERROR: src\ScannerAPIGateway.rc is missing.
-              exit /b 1
-          )
-
-          echo Source files verified.
-
-      - name: Compile Resource Metadata
-        shell: cmd
+      - name: Checksum
+        shell: pwsh
         run: |
-          rc.exe /nologo ^
-            /fo "staging\ScannerAPIGateway.res" ^
-            "src\ScannerAPIGateway.rc"
+          (Get-FileHash ScannerAPIGateway.exe -Algorithm SHA256).Hash.ToLower() + "  ScannerAPIGateway.exe" | Out-File -Encoding ascii ScannerAPIGateway.exe.sha256
 
-          if errorlevel 1 (
-              echo ERROR: Resource compilation failed.
-              exit /b 1
-          )
-
-          if not exist "staging\ScannerAPIGateway.res" (
-              echo ERROR: Resource compiler did not create the RES file.
-              exit /b 1
-          )
-
-      - name: Compile Native ScannerAPIGateway Bridge
-        shell: cmd
-        run: |
-          cl.exe ^
-            /nologo ^
-            /EHsc ^
-            /O2 ^
-            /W4 ^
-            /utf-8 ^
-            /std:c++17 ^
-            /DUNICODE ^
-            /D_UNICODE ^
-            "src\ScannerAPIGateway.cpp" ^
-            "staging\ScannerAPIGateway.res" ^
-            /Fe:"staging\ScannerAPIGateway.exe"
-
-          if errorlevel 1 (
-              echo ERROR: Native compilation failed.
-              exit /b 1
-          )
-
-          if not exist "staging\ScannerAPIGateway.exe" (
-              echo ERROR: Compiler did not create ScannerAPIGateway.exe.
-              exit /b 1
-          )
-
-      - name: Test Executable Help Command
-        shell: cmd
-        run: |
-          "staging\ScannerAPIGateway.exe" --help
-
-          if errorlevel 1 (
-              echo ERROR: Executable help test failed.
-              exit /b 1
-          )
-
-      - name: Verify Binary Architecture
-        shell: cmd
-        run: |
-          dumpbin.exe /headers "staging\ScannerAPIGateway.exe" ^
-            | findstr /i "machine"
-
-      - name: Create SHA-256 Checksum
-        shell: powershell
-        run: |
-          $binary = "staging\ScannerAPIGateway.exe"
-          $hash = (Get-FileHash -Path $binary -Algorithm SHA256).Hash
-
-          "$hash  ScannerAPIGateway.exe" |
-              Out-File `
-                  -FilePath "staging\ScannerAPIGateway.exe.sha256" `
-                  -Encoding ascii
-
-          Write-Host "SHA-256: $hash"
-
-      - name: Upload Compiled Binary Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ScannerAPIGateway-x64
+          name: ScannerAPIGateway-win-x64
           path: |
-            staging/ScannerAPIGateway.exe
-            staging/ScannerAPIGateway.exe.sha256
-          if-no-files-found: error
-          retention-days: 7
+            ScannerAPIGateway.exe
+            ScannerAPIGateway.exe.sha256
 
-  commit-to-root:
-    name: Collect and Commit Native Binary
-    needs:
-      - build-engine
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Download Compiled x64 Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ScannerAPIGateway-x64
-          path: temp-x64
-
-      - name: Verify Downloaded Artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -s temp-x64/ScannerAPIGateway.exe
-          test -s temp-x64/ScannerAPIGateway.exe.sha256
-
-          echo "Downloaded x64 artifact verified."
-
-      - name: Verify SHA-256 Checksum
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd temp-x64
-          sha256sum -c ScannerAPIGateway.exe.sha256
-
-      - name: Stage Executable into Build Directory
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p build/x64
-
-          cp \
-            temp-x64/ScannerAPIGateway.exe \
-            build/x64/ScannerAPIGateway.exe
-
-          cp \
-            temp-x64/ScannerAPIGateway.exe.sha256 \
-            build/x64/ScannerAPIGateway.exe.sha256
-
-          echo "x64 binary staged successfully."
-
-          ls -lh build/x64
-
-      - name: Commit Generated Binary
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "RatioJuris[Bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add -f \
-            build/x64/ScannerAPIGateway.exe \
-            build/x64/ScannerAPIGateway.exe.sha256
-
-          if git diff --cached --quiet; then
-            echo "No binary changes detected."
-            exit 0
-          fi
-
-          git commit \
-            -m "build: update x64 ScannerAPIGateway [skip ci]"
-
-          git pull --rebase origin main
-          git push origin HEAD:main
+          files: |
+            ScannerAPIGateway.exe
+            ScannerAPIGateway.exe.sha256
