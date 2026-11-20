@@ -1,0 +1,196 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed only for publishing a release on tags
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            msvc_arch: x86
+            exe: ScannerAPIGateway-win-x86.exe
+            linkopts: /DYNAMICBASE /NXCOMPAT /guard:cf
+          - arch: x64
+            msvc_arch: x64
+            exe: ScannerAPIGateway-win-x64.exe
+            linkopts: /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /guard:cf
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      - name: Compile resources
+        shell: cmd
+        run: rc /nologo /fo ScannerAPIGateway.res src\ScannerAPIGateway.rc
+
+      - name: Build (${{ matrix.arch }}, static CRT)
+        shell: cmd
+        run: >
+          cl /nologo /std:c++17 /EHsc /O2 /MT /W4 /utf-8 /guard:cf
+          /DUNICODE /D_UNICODE
+          src\ScannerAPIGateway.cpp ScannerAPIGateway.res
+          /Fe:${{ matrix.exe }}
+          /link ${{ matrix.linkopts }}
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $exe = './${{ matrix.exe }}'
+          $v = & $exe version | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $v.version -ne '1.2.0' -or $v.contract_version -ne 1) { throw "version failed" }
+          if ($v.arch -ne '${{ matrix.arch }}') { throw "expected arch ${{ matrix.arch }}, got $($v.arch)" }
+          & $exe scan --dpi 5 | Out-Null
+          if ($LASTEXITCODE -ne 2) { throw "expected exit 2 for --dpi 5, got $LASTEXITCODE" }
+          & $exe scan --blank-skip 2 | Out-Null
+          if ($LASTEXITCODE -ne 2) { throw "expected exit 2 for --blank-skip 2, got $LASTEXITCODE" }
+          & $exe scan --out --dpi 300 | Out-Null
+          if ($LASTEXITCODE -ne 2) { throw "expected exit 2 for missing --out value, got $LASTEXITCODE" }
+          & $exe list --backends twain | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "list --backends twain should succeed even without a DSM, got $LASTEXITCODE" }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $f = '${{ matrix.exe }}'
+          (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() + "  $f" | Out-File -Encoding ascii "$f.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScannerAPIGateway-win-${{ matrix.arch }}
+          path: |
+            ${{ matrix.exe }}
+            ${{ matrix.exe }}.sha256
+
+  windows-portable:
+    name: Windows portable ZIP
+    runs-on: windows-latest
+    needs: windows
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ScannerAPIGateway-win-*
+          path: win
+          merge-multiple: true
+
+      - name: Assemble ZIP
+        shell: pwsh
+        run: |
+          $readme = @'
+          Scanner API Gateway v1.2.0 - portable Windows build
+          ---------------------------------------------------
+          ScannerAPIGateway-win-x86.exe  32-bit (works on x86 and x64 Windows)
+          ScannerAPIGateway-win-x64.exe  64-bit
+
+          No installer. Launch the executable from a command prompt and read one
+          JSON object from stdout. See docs/index.html or README.md for the API.
+          '@
+          $readme | Out-File -Encoding utf8 win\README.txt
+          Compress-Archive -Path win\* -DestinationPath ScannerAPIGateway-win-portable.zip
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $f = 'ScannerAPIGateway-win-portable.zip'
+          (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() + "  $f" | Out-File -Encoding ascii "$f.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScannerAPIGateway-win-portable
+          path: |
+            ScannerAPIGateway-win-portable.zip
+            ScannerAPIGateway-win-portable.zip.sha256
+
+  posix:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            runner: ubuntu-latest
+            cxx: g++
+            exe: ScannerAPIGateway-linux-x64
+            curl: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+          - label: Linux arm64
+            runner: ubuntu-24.04-arm
+            cxx: g++
+            exe: ScannerAPIGateway-linux-arm64
+            curl: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+          - label: macOS x64
+            runner: macos-15-intel
+            cxx: clang++
+            exe: ScannerAPIGateway-macos-x64
+            curl: true
+          - label: macOS arm64
+            runner: macos-latest
+            cxx: clang++
+            exe: ScannerAPIGateway-macos-arm64
+            curl: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcurl
+        run: ${{ matrix.curl }}
+
+      - name: Build (eSCL backend)
+        run: >
+          ${{ matrix.cxx }} -std=c++17 -O2 -Wall -Wextra
+          src/ScannerAPIGatewayPosix.cpp -o ${{ matrix.exe }} -lcurl
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          exe='./${{ matrix.exe }}'
+          "$exe" version
+          python3 -c 'import json,subprocess,sys; p=subprocess.run([sys.argv[1],"version"],capture_output=True,text=True); assert p.returncode==0; v=json.loads(p.stdout); assert v["version"]=="1.2.0" and v["contract_version"]==1 and v["backends"]==["escl"]' "$exe"
+          for args in 'scan --dpi 5' 'scan --blank-skip 2' 'scan --out --dpi 300' 'list --backends twain' 'scan --device wia:test --out /tmp/x.png'; do
+            "$exe" $args > /dev/null && code=0 || code=$?
+            if [ "$code" -ne 2 ]; then echo "expected exit 2 for: $args (got $code)"; exit 1; fi
+          done
+          echo "argument-validation smoke tests passed"
+          "$exe" list --backends escl
+
+      - name: Checksum
+        shell: bash
+        run: sha256sum '${{ matrix.exe }}' > '${{ matrix.exe }}.sha256'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.exe }}
+          path: |
+            ${{ matrix.exe }}
+            ${{ matrix.exe }}.sha256
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ windows, windows-portable, posix ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combine checksums
+        shell: bash
+        run: cat dist/*.sha256 > dist/SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

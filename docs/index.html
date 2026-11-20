@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner API Gateway — API Reference</title>
+<style>
+  :root { color-scheme: light dark; --fg:#1b1f24; --muted:#57606a; --line:#d8dee4; --accent:#0b7285; --code:#f6f8fa; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --accent:#39c5cf; --code:#161b22; } }
+  * { box-sizing: border-box; }
+  body { margin:0 auto; max-width:900px; padding:2rem 1.25rem 5rem; font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:var(--fg); }
+  h1,h2,h3 { line-height:1.25; margin-top:2.2rem; }
+  h1 { font-size:2rem; margin-top:0; }
+  h2 { font-size:1.4rem; border-bottom:1px solid var(--line); padding-bottom:.3rem; }
+  h3 { font-size:1.1rem; }
+  a { color:var(--accent); }
+  code,pre { font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:.9em; }
+  code { background:var(--code); padding:.1em .35em; border-radius:4px; }
+  pre { background:var(--code); padding:1rem; border-radius:6px; overflow:auto; border:1px solid var(--line); }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93em; }
+  th,td { border:1px solid var(--line); padding:.45rem .65rem; text-align:left; vertical-align:top; }
+  th { background:var(--code); }
+  .lead { color:var(--muted); font-size:1.05rem; }
+  .note { border-left:3px solid var(--accent); padding-left:1rem; color:var(--muted); }
+  .tag { font-size:.8rem; color:var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Scanner API Gateway <span class="tag">v1.2.0 · contract_version 1</span></h1>
+<p class="lead">A command-line scanning API. Launch one executable, pass arguments, read one JSON object from stdout.
+No manufacturer SDK, no GUI, no DLL to link, no COM interop in your application.</p>
+
+<p>Source and releases: <a href="https://github.com/RatioJuris/ScannerAPIGateway">github.com/RatioJuris/ScannerAPIGateway</a>.
+Release notes: <a href="https://github.com/RatioJuris/ScannerAPIGateway/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+
+<h2>Why use it</h2>
+<table>
+  <tr><th>Backend</th><th>How it connects</th><th>Manufacturer software needed</th></tr>
+  <tr><td><code>escl</code></td><td>eSCL/AirScan over HTTP and mDNS (network scanners and MFPs)</td><td>No — open standard built into the device</td></tr>
+  <tr><td><code>wia</code></td><td>Windows Image Acquisition 2.0 (built into Windows)</td><td>No — uses the OS class driver where available</td></tr>
+  <tr><td><code>twain</code></td><td>32-bit or 64-bit TWAIN Data Source Manager</td><td>Only the scanner's TWAIN data source, not a bundled utility app</td></tr>
+</table>
+<p class="note">Linux and macOS builds expose <code>escl</code> only. WIA and TWAIN are Windows APIs.
+Use a Windows build for locally attached scanners that do not support eSCL.</p>
+
+<h2>Quick start</h2>
+<pre><code># Discover scanners
+ScannerAPIGateway list
+
+# Scan with defaults into a directory (files are named automatically)
+ScannerAPIGateway scan --out C:\scans\
+
+# Scan a network scanner, grayscale, 300 dpi, duplex ADF, skip blank pages
+ScannerAPIGateway scan --device "escl:http://192.168.1.50:80/eSCL" \
+  --source duplex --mode gray --dpi 300 --blank-skip 0.05 \
+  --format jpeg --out C:\scans\batch\ --verbose
+
+# Version / usage
+ScannerAPIGateway version
+ScannerAPIGateway help</code></pre>
+
+<h2>Commands</h2>
+<table>
+  <tr><th>Command</th><th>Description</th></tr>
+  <tr><td><code>list</code></td><td>Discovers devices. Accepts <code>--backends</code>. Always exits 0; per-backend health is in the JSON.</td></tr>
+  <tr><td><code>scan</code></td><td>Runs a scan job. <code>--out</code> is required.</td></tr>
+  <tr><td><code>version</code></td><td>Returns version, vendor, available backends and architecture.</td></tr>
+  <tr><td><code>help</code></td><td>Prints plain-text usage to stdout (not JSON).</td></tr>
+</table>
+
+<h2>Scan options</h2>
+<table>
+  <tr><th>Option</th><th>Default</th><th>Notes</th></tr>
+  <tr><td><code>--out &lt;path&gt;</code></td><td>—</td><td>Required. Directory (trailing <code>\</code> or <code>/</code>, or no extension) or exact file path.</td></tr>
+  <tr><td><code>--device &lt;id|auto&gt;</code></td><td><code>auto</code></td><td>Use an <code>id</code> from <code>list</code> for deterministic targeting.</td></tr>
+  <tr><td><code>--backends &lt;list&gt;</code></td><td><code>wia,twain,escl</code></td><td>Comma separated. Restricting to <code>escl</code> speeds up discovery.</td></tr>
+  <tr><td><code>--mode &lt;color|gray|bw&gt;</code></td><td><code>color</code></td><td>Applied by the shared image pipeline on every backend.</td></tr>
+  <tr><td><code>--dpi &lt;75..1200&gt;</code></td><td><code>300</code></td><td>Nearest supported value is used on eSCL devices, with a warning.</td></tr>
+  <tr><td><code>--source &lt;auto|flatbed|adf|duplex&gt;</code></td><td><code>auto</code></td><td>Hardware paper source.</td></tr>
+  <tr><td><code>--format &lt;png|jpeg|bmp|tiff&gt;</code></td><td>from <code>--out</code>, else <code>png</code></td><td>JPEG quality via <code>--quality 1..100</code>.</td></tr>
+  <tr><td><code>--area &lt;l,t,w,h&gt;</code></td><td>full page</td><td>Crop box in millimetres.</td></tr>
+  <tr><td><code>--brightness</code>, <code>--contrast</code></td><td>—</td><td><code>-1000..1000</code>; hardware only (WIA/TWAIN).</td></tr>
+  <tr><td><code>--threshold &lt;0..255&gt;</code></td><td>128</td><td>Binarization cutoff in <code>bw</code> mode.</td></tr>
+  <tr><td><code>--blank-skip &lt;0.0..1.0&gt;</code></td><td>off</td><td>Drop pages whose dark-pixel ratio is at or below the value.</td></tr>
+  <tr><td><code>--pages &lt;0..1000&gt;</code></td><td><code>0</code></td><td><code>0</code> pulls until the feeder is empty.</td></tr>
+  <tr><td><code>--timeout &lt;5..600&gt;</code></td><td><code>60</code></td><td>Idle seconds before aborting a hardware step.</td></tr>
+  <tr><td><code>--verbose</code></td><td>off</td><td>Progress on stderr only. stdout stays machine-readable.</td></tr>
+</table>
+
+<h2>Output contract</h2>
+<p>stdout is always exactly one JSON object (except <code>help</code>). stderr is used only for
+<code>--verbose</code> progress. All 1.x responses carry <code>"contract_version":1</code>.</p>
+
+<h3>Successful <code>version</code></h3>
+<pre><code>{"ok":true,"contract_version":1,"command":"version",
+ "name":"Scanner API Gateway by RatioJuris","vendor":"RatioJuris",
+ "version":"1.2.0","copyright":"© 2026 RatioJuris",
+ "backends":["wia","twain","escl"],"arch":"x64"}</code></pre>
+<p class="note">On Linux/macOS, <code>backends</code> is <code>["escl"]</code> and <code>arch</code> is
+<code>x64</code> or <code>arm64</code>. Field names never change.</p>
+
+<h3>Successful <code>list</code></h3>
+<pre><code>{"ok":true,"contract_version":1,"command":"list",
+ "devices":[{"id":"escl:http://192.168.1.50:80/eSCL","name":"Office MFP",
+             "description":"AirScan","manufacturer":"Canon","kind":"scanner","backend":"escl"}],
+ "backends":[{"name":"escl","available":true}]}</code></pre>
+<p><code>backends[].available</code> is <code>false</code> when a subsystem is missing;
+<code>message</code> then explains why. <code>list</code> still exits 0.</p>
+
+<h3>Successful <code>scan</code></h3>
+<pre><code>{"ok":true,"contract_version":1,"command":"scan","backend":"escl",
+ "device":"escl:http://192.168.1.50:80/eSCL",
+ "settings":{"mode":"gray","dpi":300,"source":"duplex","format":"jpeg"},
+ "page_count":2,"skipped_blank_pages":1,
+ "pages":[{"index":1,"path":"C:\\scans\\SCAN_20261120_101500_p0001.jpg",
+           "content_type":"image/jpeg","bytes":184322}],
+ "warnings":[],"elapsed_ms":4120}</code></pre>
+<p>Paths are absolute. Page order is the order pages were acquired. <code>skipped_blank_pages</code>
+counts pages discarded before naming, so indices stay contiguous.</p>
+
+<h3>Error</h3>
+<pre><code>{"ok":false,"contract_version":1,
+ "error":{"code":"paper_empty","message":"No paper in the document feeder."}}</code></pre>
+
+<h2>Exit codes</h2>
+<table>
+  <tr><th>Code</th><th>Meaning</th><th>Typical <code>error.code</code> values</th></tr>
+  <tr><td>0</td><td>Success</td><td>—</td></tr>
+  <tr><td>1</td><td>General failure</td><td><code>internal_error</code>, <code>scan_failed</code>, <code>output_error</code></td></tr>
+  <tr><td>2</td><td>Bad arguments</td><td><code>invalid_argument</code>, <code>unknown_option</code>, <code>missing_value</code>, <code>usage</code></td></tr>
+  <tr><td>3</td><td>No scanner</td><td><code>no_scanner</code>, <code>device_not_found</code></td></tr>
+  <tr><td>4</td><td>Timeout</td><td><code>timeout</code></td></tr>
+  <tr><td>5</td><td>Hardware state</td><td><code>paper_empty</code>, <code>paper_jam</code>, <code>cover_open</code>, <code>device_busy</code>, <code>multi_feed</code></td></tr>
+  <tr><td>6</td><td>Backend unavailable</td><td><code>wia_unavailable</code>, <code>twain_unavailable</code>, <code>escl_unavailable</code>, <code>device_communication</code></td></tr>
+</table>
+<p>Branch on the numeric exit code and <code>error.code</code>, never on message text.</p>
+
+<h2>Integrating from your app</h2>
+<pre><code>import json, subprocess
+
+EXE = r"C:\path\to\ScannerAPIGateway.exe"   # or ./ScannerAPIGateway on Linux/macOS
+
+def call(*args):
+    p = subprocess.run([EXE, *args], capture_output=True, text=True, encoding="utf-8")
+    return p.returncode, json.loads(p.stdout)
+
+code, found = call("list")
+if code != 0:
+    raise RuntimeError(found["error"]["message"])
+
+device = next((d["id"] for d in found["devices"] if d["backend"] == "escl"), "auto")
+code, result = call("scan", "--device", device, "--out", r"C:\scans\", "--dpi", "300")
+if code != 0:
+    raise RuntimeError(result["error"]["message"])
+
+for page in result["pages"]:
+    process(page["path"])</code></pre>
+<p>The same pattern works from C#, Node.js, PowerShell, Java or any language that can spawn
+a process and parse JSON. Do not link against the executable; it is a standalone CLI API.
+Always set <code>--verbose</code> only when you want stderr output.</p>
+
+<h2>Builds and artifacts</h2>
+<p>GitHub Actions builds every release. Tagged <code>v1.2.0</code> publishes:</p>
+<ul>
+  <li>Windows x86 (32-bit) executable</li>
+  <li>Windows x64 (64-bit) executable</li>
+  <li>Windows portable ZIP containing the executable</li>
+  <li>Linux builds for major architectures (x64, arm64)</li>
+  <li>macOS builds for x64 and arm64</li>
+  <li>SHA-256 checksum file for every artifact</li>
+</ul>
+<p>Windows builds include all three backends. Linux/macOS builds are eSCL-only.</p>
+
+<h2>License</h2>
+<p>GNU GPL v3.0. See <a href="https://github.com/RatioJuris/ScannerAPIGateway/blob/main/LICENSE">LICENSE.md</a>,
+<a href="https://github.com/RatioJuris/ScannerAPIGateway/blob/main/SECURITY.md">SECURITY.md</a> and
+<a href="https://github.com/RatioJuris/ScannerAPIGateway/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+
+</body>
+</html>
